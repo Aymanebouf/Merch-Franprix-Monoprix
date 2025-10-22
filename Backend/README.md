@@ -21,3 +21,11 @@ pip install -r Backend/requirements.txt
 
 
 uvicorn server:app --reload --port 8000
+
+
+Git : 
+
+git status
+git add -A
+git commit -m "Description de ce que tu as modifié"
+git push origin master

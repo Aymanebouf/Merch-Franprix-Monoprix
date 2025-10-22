@@ -9,6 +9,10 @@ import Dashboard from "./pages/Dashboard";
 import Analyse from "./pages/Analyse";
 import NotFound from "./pages/NotFound";
 import Login from "./pages/Login";
+
+import Profil from "./pages/Profile";       // <-- existe maintenant
+import Users from "./pages/Users";         // <-- existe maintenant
+
 import { useAuthStore } from "./store/useAuthStore";
 
 const queryClient = new QueryClient();
@@ -17,9 +21,17 @@ const queryClient = new QueryClient();
 const RequireAuth = () => {
   const isAuthed = useAuthStore((s) => s.isAuthed);
   const location = useLocation();
-
   if (!isAuthed) {
     return <Navigate to="/login" replace state={{ from: location }} />;
+  }
+  return <Outlet />;
+};
+
+/* --- Garde Admin : protège /utilisateurs --- */
+const RequireAdmin = () => {
+  const me = useAuthStore((s) => s.user);
+  if (!me || me.role !== "admin") {
+    return <Navigate to="/" replace />;
   }
   return <Outlet />;
 };
@@ -45,9 +57,15 @@ const App = () => (
             <Route element={<RequireAuth />}>
               <Route path="/" element={<Layout><Dashboard /></Layout>} />
               <Route path="/analyse" element={<Layout><Analyse /></Layout>} />
+              <Route path="/profil" element={<Layout><Profil /></Layout>} />
+
+              {/* Admin only */}
+              <Route element={<RequireAdmin />}>
+                <Route path="/utilisateurs" element={<Layout><Users /></Layout>} />
+              </Route>
             </Route>
 
-            {/* 404 pour les vraies mauvaises URLs */}
+            {/* 404 */}
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

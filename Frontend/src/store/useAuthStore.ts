@@ -1,172 +1,134 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
+import {
+  apiLogin,
+  apiMe,
+  apiListUsers,
+  apiCreateUser,
+  apiUpdateUser,
+  apiDeleteUser,
+  type AuthUser,
+  type UserCreateInput,
+  type UserUpdateInput,
+} from "@/lib/api";
 
-/** Rôles supportés */
-export type Role = "admin" | "user";
+// Re-export utiles pour d'autres fichiers
+export type { Role, UserCreateInput, UserUpdateInput } from "@/lib/api";
 
-/** Ce que le reste de l’app lit pour l’utilisateur courant (sans mot de passe) */
-export type User = {
-  id: string;
-  username: string;
-  email: string;
-  fullName?: string;
-  role: Role;
-  joinedAt: string; // ISO
-};
-
-/** En interne on stocke les utilisateurs avec mot de passe (POC, non prod) */
-type UserRecord = User & {
-  password: string; // ⚠️ stocké en clair pour la démo (localStorage)
-};
+type Result = { ok: true } | { ok: false; error: string };
 
 type AuthState = {
   isAuthed: boolean;
-  user: User | null;
-  users: UserRecord[];
+  token: string | null;
+  user: AuthUser | null;
 
-  // Auth
-  login: (identifier: string, password: string) => boolean; // email OU username
+  // liste utilisateurs (admin)
+  users: AuthUser[];
+
+  login: (identifier: string, password: string) => Promise<boolean>;
   logout: () => void;
+  refreshMe: () => Promise<void>;
 
-  // CRUD utilisateurs (admin)
-  createUser: (input: {
-    email: string;
-    username?: string;
-    fullName?: string;
-    password: string;
-    role: Role;
-  }) => { ok: true } | { ok: false; error: string };
-
-  updateUser: (
-    id: string,
-    patch: Partial<Omit<UserRecord, "id" | "joinedAt">>
-  ) => { ok: true } | { ok: false; error: string };
-
-  deleteUser: (id: string) => { ok: true } | { ok: false; error: string };
-};
-
-const nowIso = () => new Date().toISOString();
-
-// Admin par défaut
-const DEFAULT_ADMIN: UserRecord = {
-  id: "admin-id",
-  username: "admin",
-  email: "admin@local",
-  fullName: "Administrateur",
-  role: "admin",
-  password: "DISLOG2025",
-  joinedAt: nowIso(),
+  // actions admin
+  loadUsers: () => Promise<void>;
+  createUser: (input: UserCreateInput) => Promise<Result>;
+  updateUser: (id: number, patch: UserUpdateInput) => Promise<Result>;
+  deleteUser: (id: number) => Promise<Result>;
 };
 
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
       isAuthed: false,
+      token: null,
       user: null,
-      users: [DEFAULT_ADMIN],
 
-      login: (identifier, password) => {
-        const id = (identifier || "").trim().toLowerCase();
-        const users = get().users;
-        const found = users.find(
-          (u) => u.password === password && (u.email.toLowerCase() === id || u.username.toLowerCase() === id)
-        );
-        if (!found) return false;
-        const { password: _p, ...safe } = found;
-        set({ isAuthed: true, user: safe });
-        return true;
+      users: [],
+
+      login: async (identifier, password) => {
+        try {
+          const res = await apiLogin(identifier, password);
+          set({ isAuthed: true, token: res.access_token, user: res.user });
+          return true;
+        } catch {
+          set({ isAuthed: false, token: null, user: null, users: [] });
+          return false;
+        }
       },
 
-      logout: () => set({ isAuthed: false, user: null }),
+      logout: () => set({ isAuthed: false, token: null, user: null, users: [] }),
 
-      createUser: ({ email, username, fullName, password, role }) => {
-        const em = (email || "").trim().toLowerCase();
-        const un = (username || "").trim();
-        if (!em || !password) return { ok: false, error: "Email et mot de passe sont requis." };
-
-        const users = get().users;
-        if (users.some((u) => u.email.toLowerCase() === em)) {
-          return { ok: false, error: "Cet email existe déjà." };
+      refreshMe: async () => {
+        const { token } = get();
+        if (!token) return;
+        try {
+          const me = await apiMe(token);
+          set({ user: me, isAuthed: true });
+        } catch {
+          set({ isAuthed: false, token: null, user: null, users: [] });
         }
-        if (un && users.some((u) => u.username.toLowerCase() === un.toLowerCase())) {
-          return { ok: false, error: "Ce nom d'utilisateur existe déjà." };
-        }
-
-        const id = crypto?.randomUUID ? crypto.randomUUID() : String(Date.now());
-        const rec: UserRecord = {
-          id,
-          email: em,
-          username: un || em.split("@")[0],
-          fullName: fullName?.trim() || undefined,
-          password,
-          role: role || "user",
-          joinedAt: nowIso(),
-        };
-        set({ users: [...users, rec] });
-        return { ok: true };
       },
 
-      updateUser: (id, patch) => {
-        const users = get().users;
-        const idx = users.findIndex((u) => u.id === id);
-        if (idx === -1) return { ok: false, error: "Utilisateur introuvable." };
-
-        // Unicité email/username si modifiés
-        if (patch.email) {
-          const em = patch.email.trim().toLowerCase();
-          if (users.some((u, i) => i !== idx && u.email.toLowerCase() === em)) {
-            return { ok: false, error: "Cet email est déjà utilisé." };
-          }
+      // ===== Admin: Users =====
+      loadUsers: async () => {
+        const { token } = get();
+        if (!token) return;
+        try {
+          const list = await apiListUsers(token);
+          set({ users: list });
+        } catch (e) {
+          console.error("loadUsers failed:", e);
+          set({ users: [] });
         }
-        if (patch.username) {
-          const un = patch.username.trim();
-          if (users.some((u, i) => i !== idx && u.username.toLowerCase() === un.toLowerCase())) {
-            return { ok: false, error: "Ce nom d'utilisateur est déjà utilisé." };
-          }
-        }
-
-        // Protection : ne pas retirer le dernier admin
-        if (users[idx].role === "admin" && patch.role === "user") {
-          const otherAdmins = users.filter((u, i) => i !== idx && u.role === "admin").length;
-          if (otherAdmins === 0) return { ok: false, error: "Impossible de rétrograder le dernier admin." };
-        }
-
-        const next = [...users];
-        next[idx] = { ...next[idx], ...patch, email: patch.email?.toLowerCase() ?? next[idx].email };
-        set({ users: next });
-
-        // Si on edite l'utilisateur courant → garder user à jour
-        const me = get().user;
-        if (me && me.id === id) {
-          const { password: _p, ...safe } = next[idx];
-          set({ user: safe });
-        }
-        return { ok: true };
       },
 
-      deleteUser: (id) => {
-        const users = get().users;
-        const victim = users.find((u) => u.id === id);
-        if (!victim) return { ok: false, error: "Utilisateur introuvable." };
-
-        if (victim.role === "admin") {
-          const otherAdmins = users.filter((u) => u.id !== id && u.role === "admin").length;
-          if (otherAdmins === 0) return { ok: false, error: "Impossible de supprimer le dernier admin." };
+      createUser: async (input) => {
+        const { token } = get();
+        if (!token) return { ok: false, error: "Non authentifié." };
+        try {
+          const created = await apiCreateUser(token, input);
+          set((s) => ({ users: [...s.users, created] }));
+          return { ok: true };
+        } catch (e: any) {
+          const msg = e?.message || "Erreur lors de la création.";
+          return { ok: false, error: msg };
         }
+      },
 
-        const next = users.filter((u) => u.id !== id);
-        set({ users: next });
+      updateUser: async (id, patch) => {
+        const { token } = get();
+        if (!token) return { ok: false, error: "Non authentifié." };
+        try {
+          const updated = await apiUpdateUser(token, id, patch);
+          set((s) => ({
+            users: s.users.map((u) => (u.id === id ? updated : u)),
+            user: s.user && s.user.id === id ? updated : s.user, // si on modifie soi-même
+          }));
+          return { ok: true };
+        } catch (e: any) {
+          const msg = e?.message || "Erreur lors de la modification.";
+          return { ok: false, error: msg };
+        }
+      },
 
-        // Si on supprime l'utilisateur courant → logout
-        const me = get().user;
-        if (me && me.id === id) set({ isAuthed: false, user: null });
-
-        return { ok: true };
+      deleteUser: async (id) => {
+        const { token } = get();
+        if (!token) return { ok: false, error: "Non authentifié." };
+        try {
+          await apiDeleteUser(token, id);
+          set((s) => ({ users: s.users.filter((u) => u.id !== id) }));
+          return { ok: true };
+        } catch (e: any) {
+          const msg = e?.message || "Erreur lors de la suppression.";
+          return { ok: false, error: msg };
+        }
       },
     }),
     {
-      name: "sf-auth-v2", // bump pour nouveau schéma multi-utilisateurs
+      name: "sf-auth-jwt-v1",
       storage: createJSONStorage(() => localStorage),
+      // On peut éventuellement ne pas persister la liste des users pour éviter du stale:
+      // partialize: (s) => ({ isAuthed: s.isAuthed, token: s.token, user: s.user }),
     }
   )
 );

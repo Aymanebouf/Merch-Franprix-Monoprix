@@ -6,7 +6,15 @@ from io import BytesIO
 import pandas as pd
 import numpy as np
 
-# --- Imports robustes: package OU local ---
+from .config import settings
+from .db import Base, engine, SessionLocal
+from .models import User
+from .auth import get_password_hash
+from .routers.auth import router as auth_router
+from .routers.users import router as users_router
+
+
+# --- Imports robustes: package OU local (analyse) ---
 try:
     from .analysis import (
         _clean_cols, _to_numeric,
@@ -18,17 +26,57 @@ except Exception:
         aggregate_biscuiterie, build_final_table,
     )
 
+# --- Auth / DB ---
+try:
+    from .db import Base, engine, SessionLocal
+    from .models import User
+    from .auth import get_password_hash
+    from .routers.auth import router as auth_router
+    from .routers.users import router as users_router
+except Exception:
+    from db import Base, engine, SessionLocal
+    from models import User
+    from auth import get_password_hash
+    from routers.auth import router as auth_router
+    from routers.users import router as users_router
+
 app = FastAPI(title="Score Fournisseur API")
 
+# ---------- CORS ----------
+allow_origins = settings.CORS_ORIGINS or ["http://localhost:8080", "http://127.0.0.1:8080"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"],  # inclut Authorization
 )
 
-# ---------- Lecture 2e feuille (en mémoire) ----------
+# ---------- init DB & seed admin ----------
+@app.on_event("startup")
+def on_startup():
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        admin = db.query(User).filter(User.username.ilike("admin")).first()
+        if not admin:
+            u = User(
+                email="admin@local",
+                username="admin",
+                full_name="Administrateur",
+                role="admin",
+                password_hash=get_password_hash("DISLOG2025"),
+            )
+            db.add(u)
+            db.commit()
+    finally:
+        db.close()
+
+# ---------- mount routers (auth + users) ----------
+app.include_router(auth_router)
+app.include_router(users_router)
+
+# ---------- Lecture 2e feuille ----------
 def load_biscuiterie_from_excel(xls: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
     df = pd.read_excel(xls, sheet_name=sheet_name)
     df = _clean_cols(df)
@@ -62,7 +110,6 @@ def load_marge_min_from_excel(xls: pd.ExcelFile, sheet_name: str) -> pd.DataFram
     df["RAYON"] = df["RAYON"].ffill()
     df["FAMILLE"] = df["FAMILLE"].ffill()
 
-    # petit _key local pour filtrer "Biscuiterie"
     import unicodedata, re
     def _key(s: object) -> str:
         if s is None or (isinstance(s, float) and pd.isna(s)):
@@ -102,7 +149,6 @@ def df_to_rows(final_df: pd.DataFrame) -> list[dict]:
 
     rows: list[dict] = []
     for _, r in final[cols].iterrows():
-        # arrondi propre côté API (4 décimales max) sur scalaires
         def _num(v):
             try:
                 return round(float(v), 4)
@@ -134,7 +180,6 @@ async def analyze(
     content = await file.read()
     ext = (file.filename or "").split(".")[-1].lower()
 
-    # ---- CSV (fallback sans marge) ----
     if ext == "csv":
         import io
         df = pd.read_csv(io.BytesIO(content))
@@ -153,7 +198,7 @@ async def analyze(
                 return {"rows": []}
         df["CA Prévisionnel"] = _to_numeric(df["CA Prévisionnel"])
         df["Famille"] = df["Famille"].astype(str).str.strip()
-        df["SSFamille"] = df["SSFamille"].astype(str).str.strip()  # <- FIX ici
+        df["SSFamille"] = df["SSFamille"].astype(str).str.strip()
         df["Fournisseur"] = df["Fournisseur"].astype(str).str.strip()
         df = df.dropna(subset=["SSFamille", "Fournisseur", "CA Prévisionnel"])
 
@@ -162,10 +207,9 @@ async def analyze(
         final = build_final_table(agg, marge)
         return {"rows": df_to_rows(final)}
 
-    # ---- Excel complet (avec marge) ----
     xls   = pd.ExcelFile(BytesIO(content))
     bisc  = load_biscuiterie_from_excel(xls, sheet2)
     agg   = aggregate_biscuiterie(bisc)
-    marge = load_marge_min_from_excel(xls, sheet3)  # colonne R
+    marge = load_marge_min_from_excel(xls, sheet3)
     final = build_final_table(agg, marge)
     return {"rows": df_to_rows(final)}

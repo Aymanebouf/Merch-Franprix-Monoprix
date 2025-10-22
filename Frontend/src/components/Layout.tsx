@@ -1,6 +1,6 @@
-import { ReactNode } from "react";
+import { ReactNode, useMemo } from "react";
 import { NavLink, useNavigate, Link } from "react-router-dom";
-import { LayoutDashboard, BarChart3, Moon, Sun, Search, User, LogOut } from "lucide-react";
+import { LayoutDashboard, BarChart3, Moon, Sun, Search, User, LogOut, Users } from "lucide-react";
 import { useTheme } from "./ThemeProvider";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -16,10 +16,14 @@ const Layout = ({ children }: LayoutProps) => {
   const navigate = useNavigate();
   const { logout, user } = useAuthStore();
 
-  const navItems = [
-    { to: "/", label: "Tableau de bord", icon: LayoutDashboard },
-    { to: "/analyse", label: "Analyse", icon: BarChart3 },
-  ];
+  const navItems = useMemo(
+    () => [
+      { to: "/", label: "Tableau de bord", icon: LayoutDashboard },
+      { to: "/analyse", label: "Analyse", icon: BarChart3 },
+      ...(user?.role === "admin" ? [{ to: "/utilisateurs", label: "Utilisateurs", icon: Users }] : []),
+    ],
+    [user]
+  );
 
   const handleLogout = () => {
     logout();
@@ -28,7 +32,7 @@ const Layout = ({ children }: LayoutProps) => {
 
   return (
     <div className="flex min-h-screen w-full bg-background">
-      {/* Sidebar — largeur FIXE partout */}
+      {/* Sidebar */}
       <aside className="w-64 min-w-64 shrink-0 border-r border-sidebar-border bg-sidebar flex flex-col sticky top-0 h-screen">
         <div className="p-6">
           <h1 className="text-xl font-bold bg-gradient-primary bg-clip-text text-transparent">
@@ -63,7 +67,7 @@ const Layout = ({ children }: LayoutProps) => {
 
       {/* Main */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Header fixe */}
+        {/* Header */}
         <header className="h-16 sticky top-0 z-10 border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/75 flex items-center justify-between px-6 shadow-sm">
           <div className="flex items-center gap-4 flex-1 max-w-xl">
             <Search className="h-4 w-4 text-muted-foreground" />
@@ -74,14 +78,12 @@ const Layout = ({ children }: LayoutProps) => {
           </div>
 
           <div className="flex items-center gap-3">
-            {/* Nom d'utilisateur */}
             {user?.username && (
               <span className="text-sm text-muted-foreground hidden sm:inline-block">
                 Connecté : <span className="font-medium text-foreground">{user.username}</span>
               </span>
             )}
 
-            {/* Thème */}
             <Button
               variant="ghost"
               size="icon"
@@ -93,7 +95,6 @@ const Layout = ({ children }: LayoutProps) => {
               {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
             </Button>
 
-            {/* Déconnexion */}
             <Button
               variant="outline"
               onClick={handleLogout}
@@ -105,12 +106,7 @@ const Layout = ({ children }: LayoutProps) => {
               <span className="hidden sm:inline">Déconnexion</span>
             </Button>
 
-            {/* Avatar cliquable → page Profil */}
-            <Link
-              to="/profil"
-              title="Profil"
-              className="rounded-full outline-none focus:ring-2 focus:ring-primary/40"
-            >
+            <Link to="/profil" title="Profil" className="rounded-full outline-none focus:ring-2 focus:ring-primary/40">
               <Avatar className="h-8 w-8 ring-2 ring-primary/20 hover:ring-primary/40 transition">
                 <AvatarFallback className="bg-gradient-primary text-primary-foreground">
                   <User className="h-4 w-4" />
@@ -120,7 +116,6 @@ const Layout = ({ children }: LayoutProps) => {
           </div>
         </header>
 
-        {/* Contenu page */}
         <main className="flex-1 p-6 min-w-0">{children}</main>
       </div>
     </div>
